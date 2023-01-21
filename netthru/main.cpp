@@ -26,6 +26,61 @@ struct Settings {
     int     port = 54811;
 };
 
+int doServer(Settings settings)
+{
+    int retval = 0;
+    int socket_listen, socket_to_client, addr_len;
+    struct sockaddr_in server_addr, client_addr;
+    
+    //Create socket
+    int protocol = 0;  // protocol is IP.
+    socket_listen = socket(AF_INET , SOCK_STREAM , protocol);
+    if (socket_listen == -1)
+    {
+        printf("Could not create socket");
+    }
+    puts("Socket created");
+    
+    //Prepare the sockaddr_in structure
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(settings.port);
+    
+    //Bind
+    if( bind(socket_listen,(struct sockaddr *)&server_addr , sizeof(server_addr)) < 0)
+    {
+        //print the error message
+        perror("bind failed. Error");
+        //return 1;
+    }
+    puts("bind done");
+    
+    // Listen on the socket. Do not allow a backlog, because since the purpose
+    // of this program is to measure total throughput, we do not want simultaneous
+    // connections.
+    int backlog = 0;
+    listen(socket_listen , backlog);
+    
+    //Accept and incoming connection
+    puts("Waiting for incoming connections...");
+    addr_len = sizeof(struct sockaddr_in);
+    
+    //accept connection from an incoming client
+    socket_to_client = accept(socket_listen, (struct sockaddr *)&client_addr, (socklen_t*)&addr_len);
+    if (socket_to_client < 0) {
+        
+    }
+    
+    return retval;
+}
+
+int doClient(Settings settings)
+{
+    int retval = 0;
+    
+    return retval;
+}
+
 bool parseArg(const char *arg, string &name, string &val)
 {
     bool bOK=true;
@@ -51,47 +106,6 @@ bool parseArg(const char *arg, string &name, string &val)
         val = string(pch);
     }
     return bOK;
-}
-
-int test(int argc, const char * argv[])
-{
-    int retval = 0;
-    printf("%s called with ", argv[0]);
-    for(int j=1; j<argc; j++) {
-        printf("%s ", argv[j]);
-    }
-    printf("\n");
-    
-    string name, val;
-    bool bOK;
-    const char *myarg = "myhost";
-    bOK = parseArg(myarg, name, val);
-    if(bOK && name == "" && val == "myhost") {
-        printf("parseArg \"%s\" passed\n", myarg);
-    } else {
-        printf("** %s failed: name=%s val=%s\n", myarg, name.c_str(), val.c_str());
-        retval = 1;
-    }
-    
-    myarg = "-slow";
-    bOK = parseArg(myarg, name, val);
-    if(bOK && name == "slow" && val == "") {
-        printf("parseArg \"%s\" passed\n", myarg);
-    } else {
-        printf("** %s failed: name=%s val=%s\n", myarg, name.c_str(), val.c_str());
-        retval = 1;
-    }
-    
-    myarg = "-mode:server";
-    bOK = parseArg(myarg, name, val);
-    if(bOK && name == "mode" && val == "server") {
-        printf("parseArg \"%s\" passed\n", myarg);
-    } else {
-        printf("** %s failed: name=%s val=%s\n", myarg, name.c_str(), val.c_str());
-        retval = 1;
-    }
-    
-    return 0;
 }
 
 void usage()
@@ -155,61 +169,6 @@ bool parseCmdLine(int argc, const char * argv[], Settings &settings)
     return bOK;
 }
 
-int doServer(Settings settings)
-{
-    int retval = 0;
-    int socket_listen, socket_to_client, addr_len;
-    struct sockaddr_in server_addr, client_addr;
-    
-    //Create socket
-    int protocol = 0;  // protocol is IP.
-    socket_listen = socket(AF_INET , SOCK_STREAM , protocol);
-    if (socket_listen == -1)
-    {
-        printf("Could not create socket");
-    }
-    puts("Socket created");
-    
-    //Prepare the sockaddr_in structure
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(settings.port);
-    
-    //Bind
-    if( bind(socket_listen,(struct sockaddr *)&server_addr , sizeof(server_addr)) < 0)
-    {
-        //print the error message
-        perror("bind failed. Error");
-        //return 1;
-    }
-    puts("bind done");
-    
-    // Listen on the socket. Do not allow a backlog, because since the purpose
-    // of this program is to measure total throughput, we do not want simultaneous
-    // connections.
-    int backlog = 0;
-    listen(socket_listen , backlog);
-    
-    //Accept and incoming connection
-    puts("Waiting for incoming connections...");
-    addr_len = sizeof(struct sockaddr_in);
-    
-    //accept connection from an incoming client
-    socket_to_client = accept(socket_listen, (struct sockaddr *)&client_addr, (socklen_t*)&addr_len);
-    if (socket_to_client < 0) {
-        
-    }
-    
-    return retval;
-}
-
-int doClient(Settings settings)
-{
-    int retval = 0;
-    
-    return retval;
-}
-
 int doMain(int argc, const char * argv[])
 {
     int retval = 0;
@@ -224,6 +183,47 @@ int doMain(int argc, const char * argv[])
         usage();
     }
     return retval;
+}
+
+int test(int argc, const char * argv[])
+{
+    int retval = 0;
+    printf("%s called with ", argv[0]);
+    for(int j=1; j<argc; j++) {
+        printf("%s ", argv[j]);
+    }
+    printf("\n");
+    
+    string name, val;
+    bool bOK;
+    const char *myarg = "myhost";
+    bOK = parseArg(myarg, name, val);
+    if(bOK && name == "" && val == "myhost") {
+        printf("parseArg \"%s\" passed\n", myarg);
+    } else {
+        printf("** %s failed: name=%s val=%s\n", myarg, name.c_str(), val.c_str());
+        retval = 1;
+    }
+    
+    myarg = "-slow";
+    bOK = parseArg(myarg, name, val);
+    if(bOK && name == "slow" && val == "") {
+        printf("parseArg \"%s\" passed\n", myarg);
+    } else {
+        printf("** %s failed: name=%s val=%s\n", myarg, name.c_str(), val.c_str());
+        retval = 1;
+    }
+    
+    myarg = "-mode:server";
+    bOK = parseArg(myarg, name, val);
+    if(bOK && name == "mode" && val == "server") {
+        printf("parseArg \"%s\" passed\n", myarg);
+    } else {
+        printf("** %s failed: name=%s val=%s\n", myarg, name.c_str(), val.c_str());
+        retval = 1;
+    }
+    
+    return 0;
 }
 
 int main(int argc, const char * argv[])

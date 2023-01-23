@@ -10,8 +10,14 @@
 // I can't figure out how to create a non-debug build.  I'm using Xcode's menu option:
 // Product | Build For | Running
 
+#include <chrono>
+#include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string>
+#include <string.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -29,7 +35,80 @@ struct Settings {
     int     bytes_per_buf = 12288;
     int     port = 54811;
     string  msg="";
+    string  logfilename;
 };
+
+FILE *fileLog=NULL;
+
+// Safe verion of strcpy without having to worry about which C++
+// standard is supported by the compiler.
+void safe_strcpy(char *dest, size_t destAlloc, const char *source)
+{
+    if(destAlloc > 0) {
+        while(destAlloc-- > 1){
+            *(dest++) = *(source++);
+        }
+        *dest = '\0';
+    }
+}
+
+// Returns date/time in string format.  Thanks to
+// https://stackoverflow.com/questions/34857119/
+// but note that I had to substitute system_clock to get it to work on macOS.
+using Clock = std::chrono::system_clock;
+static std::string timePointToString(const Clock::time_point &tp, const std::string &format, bool withMs = true, bool utc = false)
+{
+    const Clock::time_point::duration tt = tp.time_since_epoch();
+    const time_t durS = std::chrono::duration_cast<std::chrono::seconds>(tt).count();
+    std::ostringstream ss;
+    if (const std::tm *tm = (utc ? std::gmtime(&durS) : std::localtime(&durS))) {
+        ss << std::put_time(tm, format.c_str());
+        if (withMs) {
+            const long long durMs = std::chrono::duration_cast<std::chrono::milliseconds>(tt).count();
+            ss << std::setw(3) << std::setfill('0') << int(durMs - durS * 1000);
+        }
+    }
+    // gmtime/localtime() returned null
+    else {
+        ss << "<FORMAT ERROR>";
+    }
+    return ss.str();
+}
+
+void logMsg(const char *fmt, ...)
+{
+    char buf[200];
+    
+    Clock::time_point now = std::chrono::system_clock::now();
+    std::string stamp = timePointToString(now, "%Y-%m-%d %H:%M:%S.");
+
+    safe_strcpy(buf, sizeof(buf), stamp.c_str());
+    buf[stamp.length()] = ' ';
+    
+    va_list args1;
+    va_start(args1, fmt);
+    vsnprintf(buf+stamp.length()+1, sizeof(buf) - stamp.length()-2, fmt, args1);
+    va_end(args1);
+    
+    fprintf(fileLog, "%s\n", buf);
+    printf("%s\n",buf);
+}
+
+void openLogFile(string logfilename)
+{
+    fileLog = fopen(logfilename.c_str(), "a");
+}
+
+void flushLogFile()
+{
+    fflush(fileLog);
+}
+
+void closeLogFile()
+{
+    fclose(fileLog);
+    fileLog = NULL;
+}
 
 // Return the elapsed wall clock time (from some arbitrary starting point)
 // in seconds.
@@ -40,7 +119,6 @@ double getCurrentSeconds()
 
     gettimeofday(&tv, &tz);
     double secs = ((double)tv.tv_sec) + (0.000001 * tv.tv_usec);
-    //printf("getCurrentSeconds returning %.2f\n", secs);
     return secs;
 }
 
@@ -69,8 +147,11 @@ bool sendAll(int sock, unsigned char *buf, size_t nbytes)
 
 // Read from a TCP socket until the provided buffer is full, or we
 // see the connection close (or return an error).
-// Exit:    Returns the number of bytes read, or 0 if connection
-//          closed, or -1 if error.
+// Entry:   sock    is the socket to read from.
+//          nbytes  is the size of the buffer pbuf.
+// Exit:    Returns the number of bytes read, or -1 if error.
+//          pbuf    contains the bytes that were read.
+//          bEOF is true iff the connection closed.
 ssize_t recvAll(int sock, unsigned char *pbuf, ssize_t nbytes, bool &bEOF)
 {
     fd_set fd_read, fd_write, fd_error;
@@ -153,20 +234,22 @@ int handleServerConnection(int socket_to_client)
     if(ptok) {
         // Parse the # of seconds to send.
         ptok = strtok(NULL, "|");
-        secsToSend = atoi(ptok);
     }
     if(ptok) {
+        secsToSend = atoi(ptok);
         // Parse the # of bytes to send at once.
         ptok = strtok(NULL, "|");
-        bytesPerBuf = atoi(ptok);
     }
     if(ptok) {
+        bytesPerBuf = atoi(ptok);
         // Parse the message the client wants us to log.
         ptok = strtok(NULL, "|");
-        msgFromClient = ptok;
+        if(ptok) {
+            msgFromClient = ptok;
+        }
     }
     
-    printf("Client says send for %d secs; %d bytes per send; msg: %s\n",
+    logMsg("Client says send for %d secs; %d bytes per send; msg: %s",
            secsToSend, bytesPerBuf, msgFromClient.c_str());
 
     // This will auto-delete the array when it goes out of scope.
@@ -203,6 +286,11 @@ int handleServerConnection(int socket_to_client)
     } while(secsSinceStart < secsToSend);
     
     close(socket_to_client);
+    
+    double timeEnd = getCurrentSeconds();
+    double secs = timeEnd - timeStart;
+    double mbPerSec = totBytesSent / secs / (1024.0*1024.0);
+    logMsg("Sent %ld bytes in %.3f secs for %.3f MB/sec", totBytesSent, secs, mbPerSec);
     
     return retval;
 }
@@ -242,12 +330,12 @@ int doServer(Settings settings)
     
     do {
         // Accept connection from an incoming client.
-        puts("Waiting to accept a connection");
+        logMsg("Waiting to accept a connection");
         socket_to_client = accept(socket_listen, (struct sockaddr *)&client_addr, (socklen_t*)&addr_len);
         if (socket_to_client < 0) {
             perror("accept failed");
         } else {
-            printf("Accepted connection\n");
+            logMsg("Accepted connection");
             
             // Weirdly, macos seems to kill the app with SIGPIPE when a connection
             // closes.  Prevent that from happening.
@@ -257,7 +345,8 @@ int doServer(Settings settings)
             }
             
             retval = handleServerConnection(socket_to_client);
-            printf("Client connection closed.\n");
+            logMsg("Client connection closed.");
+            flushLogFile();
         }
     } while (true);
     
@@ -296,7 +385,7 @@ int handleClientConnection(int sock, Settings settings)
                         timeLastUIUpdate = timeNow;
                         double mbPerSec = (((double) bytesRecSinceLastUIUpdate) / ((double) secsSinceLastUIUpdate)) / (1024*1024);
                         // Weirdly, nothing prints on macos if I use "\r".
-                        printf("%8.2f MB/sec\n", mbPerSec);
+                        printf("%9.3f MB/sec\n", mbPerSec);
                         bytesRecSinceLastUIUpdate = 0;
                     }
                 }
@@ -304,7 +393,7 @@ int handleClientConnection(int sock, Settings settings)
                     // Clean disconnect received; end of data.
                     double secsTot = timeNow - timeStart;
                     double mbPerSec = (((double) totBytesRec) / ((double) secsTot)) / (1024*1024);
-                    printf("\n%8.2f MB/sec final average; %ld timer calls\n", mbPerSec, nCallsToTimer);
+                    logMsg("%8.2f MB/sec final average; %ld timer calls\n", mbPerSec, nCallsToTimer);
                     break;
                 }
             } else {
@@ -321,6 +410,9 @@ int doClient(Settings settings)
 {
     int retval = 0;
     
+    logMsg("Client parameters: remoteip=%s secs=%d bytePerBuf=%d msg=%s",
+           settings.remoteip.c_str(), settings.secs, settings.bytes_per_buf,
+           settings.msg.c_str());
     int sock;
     struct sockaddr_in server_addr;
     
@@ -337,12 +429,13 @@ int doClient(Settings settings)
     server_addr.sin_port = htons(settings.port);
 
     // Connect to remote server
-    printf("Connecting to %s port %d\n", settings.remoteip.c_str(), settings.port);
+    logMsg("Connecting to %s port %d", settings.remoteip.c_str(), settings.port);
     if (connect(sock , (struct sockaddr *)&server_addr , sizeof(server_addr)) < 0)
     {
         perror("connect failed. Error");
         return errno;
     }
+    logMsg("Connected to  %s port %d", settings.remoteip.c_str(), settings.port);
     
     retval = handleClientConnection(sock, settings);
 
@@ -390,7 +483,7 @@ void usage()
         "Usage for client mode:",
         "  netthru -mode:client -remoteip:remoteip -secs:secs -nbytes:nbytes -msg:msg",
         "where remoteip is the IPv4 address of the server",
-        "      secs     is the number of seconds to send",
+        "      secs     is the number of seconds for which the server should send",
         "      nbytes   is the number of bytes the server should send at once",
         "      msg      is an arbitrary message for the server to log",
         "",
@@ -414,8 +507,10 @@ bool parseCmdLine(int argc, const char * argv[], Settings &settings)
             if("mode"==name) {
                 if("server"==val) {
                     settings.mode = Settings::server;
+                    settings.logfilename = "netthruserver.log";
                 } else if("client"==val) {
                     settings.mode = Settings::client;
+                    settings.logfilename = "netthruclient.log";
                 } else {
                     printf("Invalid mode: %s\n", val.c_str());
                     bOK = false;
@@ -449,11 +544,13 @@ int doMain(int argc, const char * argv[])
     int retval = 0;
     Settings settings;
     if(parseCmdLine(argc, argv, settings)) {
+        openLogFile(settings.logfilename);
         if(settings.mode == Settings::server) {
             retval = doServer(settings);
         } else {
             retval = doClient(settings);
         }
+        closeLogFile();
     } else {
         usage();
     }
@@ -463,12 +560,14 @@ int doMain(int argc, const char * argv[])
 int test(int argc, const char * argv[])
 {
     int retval = 0;
+    
     printf("%s called with ", argv[0]);
     for(int j=1; j<argc; j++) {
         printf("%s ", argv[j]);
     }
     printf("\n");
     
+    //  Test parseArg.
     string name, val;
     bool bOK;
     const char *myarg = "myhost";
@@ -497,6 +596,12 @@ int test(int argc, const char * argv[])
         printf("** %s failed: name=%s val=%s\n", myarg, name.c_str(), val.c_str());
         retval = 1;
     }
+    
+    // Test returning time to milliseconds.
+    const auto tp = Clock::now();
+    std::cout << timePointToString(tp, "%Z %Y-%m-%d %H:%M:%S.") << std::endl;
+
+    //printf("timePointToString returned %s\n", stamp.c_str());
     
     return 0;
 }

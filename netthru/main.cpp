@@ -28,11 +28,19 @@
 
 using std::string;
 
+// Macros to stringify a macro value outside a macro.
+#define makestr(a) #a
+#define xstr(a) makestr(a)
+
+#define DEFAULT_SECS 10
+#define DEFAULT_BYTES_PER_BUF 12288
+#define DEFAULT_PORT 54811
+
 struct Settings {
     enum enum_mode {unknown, server, client} mode = unknown;
     string  remoteip;
-    int     secs = 10;
-    int     bytes_per_buf = 12288;
+    int     secs = DEFAULT_SECS;
+    int     bytes_per_buf = DEFAULT_BYTES_PER_BUF;
     int     port = 54811;
     string  msg="";
     string  logfilename;
@@ -290,7 +298,7 @@ int handleServerConnection(int socket_to_client)
     double timeEnd = getCurrentSeconds();
     double secs = timeEnd - timeStart;
     double mbPerSec = totBytesSent / secs / (1024.0*1024.0);
-    logMsg("Sent %ld bytes in %.3f secs for %.3f MB/sec", totBytesSent, secs, mbPerSec);
+    logMsg("Sent %ld bytes in %.3f secs for %.3f MB/sec (%.3f Mb/sec)", totBytesSent, secs, mbPerSec, 8*mbPerSec);
     
     return retval;
 }
@@ -324,13 +332,15 @@ int doServer(Settings settings)
     // of this program is to measure total throughput, we do not want simultaneous
     // connections.
     int backlog = 0;
-    listen(socket_listen, backlog);
+    if(-1 == listen(socket_listen, backlog)) {
+        perror("Error listening");
+    }
     
     addr_len = sizeof(struct sockaddr_in);
     
     do {
         // Accept connection from an incoming client.
-        logMsg("Waiting to accept a connection");
+        logMsg("Waiting to accept a connection on port %d", settings.port);
         socket_to_client = accept(socket_listen, (struct sockaddr *)&client_addr, (socklen_t*)&addr_len);
         if (socket_to_client < 0) {
             perror("accept failed");
@@ -385,15 +395,16 @@ int handleClientConnection(int sock, Settings settings)
                         timeLastUIUpdate = timeNow;
                         double mbPerSec = (((double) bytesRecSinceLastUIUpdate) / ((double) secsSinceLastUIUpdate)) / (1024*1024);
                         // Weirdly, nothing prints on macos if I use "\r".
-                        printf("%9.3f MB/sec\n", mbPerSec);
+                        printf("%9.3f MB/sec (%.3f Mb/sec)\n", mbPerSec, 8*mbPerSec);
                         bytesRecSinceLastUIUpdate = 0;
                     }
                 }
                 if(bEOF) {
                     // Clean disconnect received; end of data.
                     double secsTot = timeNow - timeStart;
-                    double mbPerSec = (((double) totBytesRec) / ((double) secsTot)) / (1024*1024);
-                    logMsg("%8.2f MB/sec final average; %ld timer calls\n", mbPerSec, nCallsToTimer);
+                    double mBytesPerSec = (((double) totBytesRec) / ((double) secsTot)) / (1024*1024);
+                    double mBitsPerSec = 8*mBytesPerSec;
+                    logMsg("%8.3f MB/sec (%.3f Mb/sec) final average; %ld timer calls", mBytesPerSec, mBitsPerSec, nCallsToTimer);
                     break;
                 }
             } else {
@@ -473,19 +484,25 @@ bool parseArg(const char *arg, string &name, string &val)
 void usage()
 {
     const char *msg[] = {
-        "netthru: program to measure network throughput via TCP.",
+        "netthru: Program to measure network throughput via TCP.",
         "Run two copies of this program, one in server mode and one in client mode.",
         "",
         "Usage for server mode:",
-        "  netthru -mode:server",
-        "(Server mode is simple, because the server takes its directions from the client.)",
+        "  netthru -mode:server [-port:port]",
+        "where port     is the TCP port. Defaults to " xstr(DEFAULT_PORT) ".",
+        "(Server mode is simple, because the server takes its directions from ",
+        "the client.)",
         "",
         "Usage for client mode:",
-        "  netthru -mode:client -remoteip:remoteip -secs:secs -nbytes:nbytes -msg:msg",
-        "where remoteip is the IPv4 address of the server",
-        "      secs     is the number of seconds for which the server should send",
-        "      nbytes   is the number of bytes the server should send at once",
-        "      msg      is an arbitrary message for the server to log",
+        "  netthru -mode:client -remoteip:remoteip [-port:port] [-secs:secs] ",
+        "    [-nbytes:nbytes] [-msg:msg]",
+        "where remoteip is the IPv4 address of the server.",
+        "      port     is the TCP port. Defaults to " xstr(DEFAULT_PORT) ".",
+        "      secs     is the number of seconds for which the server should send.",
+        "               Defaults to " xstr(DEFAULT_SECS) ".",
+        "      nbytes   is the number of bytes the server should send at once.",
+        "               Defaults to " xstr(DEFAULT_BYTES_PER_BUF) ".",
+        "      msg      is an arbitrary message for the server to log.",
         "",
         "MRR  2023-01-20",
         NULL
@@ -521,6 +538,8 @@ bool parseCmdLine(int argc, const char * argv[], Settings &settings)
                 settings.secs = atoi(val.c_str());
             } else if("nbytes"==name) {
                 settings.bytes_per_buf = atoi((val.c_str()));
+            } else if("port"==name) {
+                settings.port = atoi(val.c_str());
             } else if("msg"==name) {
                 settings.msg = val;
             } else {

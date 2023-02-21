@@ -1,1 +1,1 @@
-~/Library/Developer/Xcode/DerivedData/netthru-dctqldmtairduzemiaiismkbpdgz/Build/Products/Debug/netthru -mode:server
+~/Library/Developer/Xcode/DerivedData/netthru-dctqldmtairduzemiaiismkbpdgz/Build/Products/Release/netthru -mode:server
